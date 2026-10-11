@@ -221538,6 +221538,227 @@
           }
         }
       ]
+    },
+    {
+      "name": "198. Virtual key provider configs accept allow_all_keys and keys (vk-allow-all-keys)",
+      "description": "Virtual key create and update read the allow_all_keys/keys fields that GET returns. Before, they were dropped and the key was stored deny-all, so every request through it failed with \"no keys found\". Each case creates its own run-scoped virtual key (case 2 in its pre-request script) and deletes it from the test script. Cases 1 and 2 each make one live chat call on openai/gpt-4o-mini. Run with FEATURE=\"vk-allow-all-keys\".",
+      "item": [
+        {
+          "name": "openai virtual key: allow_all_keys on create is stored and serves openai/gpt-4o-mini - vk-allow-all-keys",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('allowAllKeysVkRun', 'run-' + Date.now());",
+                  "pm.collectionVariables.unset('allowAllKeysVkId');"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var BASE = pm.variables.get('baseUrl');",
+                  "var json = {}; try { json = pm.response.json() || {}; } catch (e) { json = {}; }",
+                  "var vk = json.virtual_key || {};",
+                  "var pc = (vk.provider_configs || [])[0] || {};",
+                  "var value = (vk.value && typeof vk.value === 'object') ? vk.value.value : vk.value;",
+                  "pm.test('the request succeeds', function () {",
+                  "  pm.expect(pm.response.code, pm.response.text()).to.eql(200);",
+                  "});",
+                  "pm.test('allow_all_keys is stored as true', function () {",
+                  "  pm.expect(pc.allow_all_keys, 'allow_all_keys was dropped: ' + pm.response.text()).to.eql(true);",
+                  "});",
+                  "var vkId = vk.id || pm.collectionVariables.get('allowAllKeysVkId');",
+                  "function cleanup() {",
+                  "  if (!vkId) { return; }",
+                  "  pm.sendRequest({ url: BASE + '/api/governance/virtual-keys/' + vkId, method: 'DELETE' }, function (err, res) {",
+                  "    pm.test('cleanup: the run-scoped virtual key is deleted', function () {",
+                  "      if (err) { pm.expect.fail(String(err)); }",
+                  "      pm.expect(res.code, res.text()).to.eql(200);",
+                  "    });",
+                  "  });",
+                  "}",
+                  "if (!value) { return cleanup(); }",
+                  "var chat = { model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: 'Reply with the single word: ok' }], max_tokens: 8 };",
+                  "pm.sendRequest({ url: BASE + '/v1/chat/completions', method: 'POST', header: { 'Content-Type': 'application/json', 'x-bf-vk': value }, body: { mode: 'raw', raw: JSON.stringify(chat) } }, function (err, res) {",
+                  "  pm.test('a chat completion through the virtual key succeeds', function () {",
+                  "    if (err) { pm.expect.fail(String(err)); }",
+                  "    pm.expect(res.code, 'the key was stored deny-all: ' + res.text()).to.eql(200);",
+                  "  });",
+                  "  cleanup();",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/governance/virtual-keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "governance",
+                "virtual-keys"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"harness-allow-all-keys-vk-{{allowAllKeysVkRun}}\",\n  \"provider_configs\": [\n    {\n      \"provider\": \"openai\",\n      \"allowed_models\": [\n        \"*\"\n      ],\n      \"allow_all_keys\": true\n    }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "openai virtual key: allow_all_keys on a PUT that replaces the provider config is stored and serves openai/gpt-4o-mini - vk-allow-all-keys",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('allowAllKeysVkRun', 'run-' + Date.now());",
+                  "pm.collectionVariables.unset('allowAllKeysVkId');",
+                  "var create = { name: 'harness-allow-all-keys-vk-put-' + pm.collectionVariables.get('allowAllKeysVkRun'), provider_configs: [{ provider: 'openai', allowed_models: ['*'], key_ids: [] }] };",
+                  "pm.sendRequest({ url: pm.variables.get('baseUrl') + '/api/governance/virtual-keys', method: 'POST', header: { 'Content-Type': 'application/json' }, body: { mode: 'raw', raw: JSON.stringify(create) } }, function (err, res) {",
+                  "  if (err || res.code !== 200) { throw new Error('setup: creating the deny-all virtual key failed: ' + (err ? String(err) : res.text())); }",
+                  "  pm.collectionVariables.set('allowAllKeysVkId', res.json().virtual_key.id);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var BASE = pm.variables.get('baseUrl');",
+                  "var json = {}; try { json = pm.response.json() || {}; } catch (e) { json = {}; }",
+                  "var vk = json.virtual_key || {};",
+                  "var pc = (vk.provider_configs || [])[0] || {};",
+                  "var value = (vk.value && typeof vk.value === 'object') ? vk.value.value : vk.value;",
+                  "pm.test('the request succeeds', function () {",
+                  "  pm.expect(pm.response.code, pm.response.text()).to.eql(200);",
+                  "});",
+                  "pm.test('allow_all_keys is stored as true', function () {",
+                  "  pm.expect(pc.allow_all_keys, 'allow_all_keys was dropped: ' + pm.response.text()).to.eql(true);",
+                  "});",
+                  "var vkId = vk.id || pm.collectionVariables.get('allowAllKeysVkId');",
+                  "function cleanup() {",
+                  "  if (!vkId) { return; }",
+                  "  pm.sendRequest({ url: BASE + '/api/governance/virtual-keys/' + vkId, method: 'DELETE' }, function (err, res) {",
+                  "    pm.test('cleanup: the run-scoped virtual key is deleted', function () {",
+                  "      if (err) { pm.expect.fail(String(err)); }",
+                  "      pm.expect(res.code, res.text()).to.eql(200);",
+                  "    });",
+                  "  });",
+                  "}",
+                  "if (!value) { return cleanup(); }",
+                  "var chat = { model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: 'Reply with the single word: ok' }], max_tokens: 8 };",
+                  "pm.sendRequest({ url: BASE + '/v1/chat/completions', method: 'POST', header: { 'Content-Type': 'application/json', 'x-bf-vk': value }, body: { mode: 'raw', raw: JSON.stringify(chat) } }, function (err, res) {",
+                  "  pm.test('a chat completion through the virtual key succeeds', function () {",
+                  "    if (err) { pm.expect.fail(String(err)); }",
+                  "    pm.expect(res.code, 'the key was stored deny-all: ' + res.text()).to.eql(200);",
+                  "  });",
+                  "  cleanup();",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/governance/virtual-keys/{{allowAllKeysVkId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "governance",
+                "virtual-keys",
+                "{{allowAllKeysVkId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"provider_configs\": [\n    {\n      \"provider\": \"openai\",\n      \"allowed_models\": [\n        \"*\"\n      ],\n      \"allow_all_keys\": true\n    }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "[EXPECT-400] openai virtual key: a keys entry without key_id is rejected - vk-allow-all-keys",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('allowAllKeysVkRun', 'run-' + Date.now());"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var json = {}; try { json = pm.response.json() || {}; } catch (e) { json = {}; }",
+                  "pm.test('a keys entry without key_id is rejected with 400', function () {",
+                  "  pm.expect(pm.response.code, pm.response.text()).to.eql(400);",
+                  "});",
+                  "pm.test('the error names key_id', function () {",
+                  "  pm.expect(((json.error || {}).message || ''), pm.response.text()).to.include('key_id');",
+                  "});",
+                  "var vkId = (json.virtual_key || {}).id;",
+                  "if (vkId) { pm.sendRequest({ url: pm.variables.get('baseUrl') + '/api/governance/virtual-keys/' + vkId, method: 'DELETE' }, function () {}); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/governance/virtual-keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "governance",
+                "virtual-keys"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"harness-allow-all-keys-vk-empty-key-id-{{allowAllKeysVkRun}}\",\n  \"provider_configs\": [\n    {\n      \"provider\": \"openai\",\n      \"allowed_models\": [\n        \"*\"\n      ],\n      \"keys\": [\n        {\n          \"name\": \"harness-missing-key\"\n        }\n      ]\n    }\n  ]\n}"
+            }
+          }
+        }
+      ]
     }
   ]
 }

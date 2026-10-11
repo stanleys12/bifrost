@@ -513,6 +513,17 @@ CreateVirtualKeyRequest:
             description: Provider API key IDs allowed for this config. `["*"]` allows every key for the provider; an empty or omitted array denies all keys.
             items:
               type: string
+          allow_all_keys:
+            type: boolean
+            description: Same as sending `key_ids` as `["*"]`, matching the field returned on read. `false` with no `keys` denies all keys. Ignored when `key_ids` is sent.
+          keys:
+            type: array
+            description: Same as `key_ids`, in the shape returned on read. Only `key_id` is read from each entry and it is required. Ignored when `key_ids` is sent or `allow_all_keys` is true.
+            items:
+              type: object
+              properties:
+                key_id:
+                  type: string
     mcp_configs:
       type: array
       description: MCP configurations (empty means no MCP tools allowed, deny-by-default)
@@ -620,9 +631,20 @@ UpdateVirtualKeyRequest:
             $ref: '#/UpdateRateLimitRequest'
           key_ids:
             type: array
-            description: Provider API key IDs allowed for this config. `["*"]` allows every key for the provider; an empty or omitted array denies all keys.
+            description: Provider API key IDs allowed for this config. `["*"]` allows every key for the provider; an empty array denies all keys. On an existing provider config, omitting `key_ids`, `allow_all_keys` and `keys` leaves the key associations unchanged.
             items:
               type: string
+          allow_all_keys:
+            type: boolean
+            description: Same as sending `key_ids` as `["*"]`, matching the field returned on read. `false` with no `keys` denies all keys. Ignored when `key_ids` is sent.
+          keys:
+            type: array
+            description: Same as `key_ids`, in the shape returned on read. Only `key_id` is read from each entry and it is required. Ignored when `key_ids` is sent or `allow_all_keys` is true.
+            items:
+              type: object
+              properties:
+                key_id:
+                  type: string
     mcp_configs:
       type: array
       items:

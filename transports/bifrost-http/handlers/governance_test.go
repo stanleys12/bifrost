@@ -4983,21 +4983,10 @@ func TestApplyAssignees(t *testing.T) {
 // existing associations untouched; only an explicit list (including []) changes
 // them.
 func TestUpdateVirtualKey_PutWithoutKeyIDsPreservesKeyAssociations(t *testing.T) {
-	SetLogger(&mockLogger{})
-	store := setupPricingOverrideHandlerStore(t)
-	manager := &budgetOverrideTestGovernanceManager{store: store}
-	handler := &GovernanceHandler{configStore: store, governanceManager: manager}
+	handler, store := newKeyAssociationTestHandler(t)
 	ctx := context.Background()
 
 	const providerName = "openai"
-	require.NoError(t, store.AddProvider(ctx, schemas.ModelProvider(providerName), configstore.ProviderConfig{}))
-
-	// Seed one provider key so the explicit-list case has something to attach.
-	require.NoError(t, store.CreateProviderKey(ctx, schemas.ModelProvider(providerName), schemas.Key{
-		ID:    "key-a",
-		Name:  "key-a",
-		Value: *schemas.NewSecretVar("sk-test-a"),
-	}))
 
 	newVK := func(t *testing.T, id string, allowAll bool, keys []configstoreTables.TableKey) *configstoreTables.TableVirtualKey {
 		t.Helper()
@@ -5029,21 +5018,13 @@ func TestUpdateVirtualKey_PutWithoutKeyIDsPreservesKeyAssociations(t *testing.T)
 		return putCtx
 	}
 
-	providerConfigOf := func(t *testing.T, vkID string) *configstoreTables.TableVirtualKeyProviderConfig {
-		t.Helper()
-		vk, err := store.GetVirtualKey(ctx, vkID)
-		require.NoError(t, err)
-		require.Len(t, vk.ProviderConfigs, 1)
-		return &vk.ProviderConfigs[0]
-	}
-
 	// Case 1: allow_all_keys=true survives a PUT that omits key_ids entirely.
 	vk1 := newVK(t, "vk-roundtrip-allowall", true, nil)
-	pc1 := providerConfigOf(t, vk1.ID)
+	pc1 := vkProviderConfigOf(t, store, vk1.ID)
 	putVK(t, vk1.ID, fmt.Sprintf(
 		`{"description":"edited via GET->PUT","is_active":true,"provider_configs":[{"id":%d,"provider":"%s","allowed_models":["*"]}]}`,
 		pc1.ID, providerName))
-	got := providerConfigOf(t, vk1.ID)
+	got := vkProviderConfigOf(t, store, vk1.ID)
 	require.True(t, got.AllowAllKeys, "omitted key_ids wiped allow_all_keys")
 
 	// Case 2: explicit key list survives a PUT that omits key_ids.
@@ -5051,11 +5032,11 @@ func TestUpdateVirtualKey_PutWithoutKeyIDsPreservesKeyAssociations(t *testing.T)
 	require.NoError(t, err)
 	require.Len(t, keys, 1)
 	vk2 := newVK(t, "vk-roundtrip-keys", false, keys)
-	pc2 := providerConfigOf(t, vk2.ID)
+	pc2 := vkProviderConfigOf(t, store, vk2.ID)
 	putVK(t, vk2.ID, fmt.Sprintf(
 		`{"description":"edited via GET->PUT","is_active":true,"provider_configs":[{"id":%d,"provider":"%s","allowed_models":["*"]}]}`,
 		pc2.ID, providerName))
-	got2 := providerConfigOf(t, vk2.ID)
+	got2 := vkProviderConfigOf(t, store, vk2.ID)
 	require.False(t, got2.AllowAllKeys)
 	require.Len(t, got2.Keys, 1, "omitted key_ids detached the existing key")
 	require.Equal(t, "key-a", got2.Keys[0].KeyID)
@@ -5065,17 +5046,104 @@ func TestUpdateVirtualKey_PutWithoutKeyIDsPreservesKeyAssociations(t *testing.T)
 	putVK(t, vk1.ID, fmt.Sprintf(
 		`{"is_active":true,"provider_configs":[{"id":%d,"provider":"%s","allowed_models":["*"],"key_ids":[]}]}`,
 		pc1.ID, providerName))
-	got3 := providerConfigOf(t, vk1.ID)
+	got3 := vkProviderConfigOf(t, store, vk1.ID)
 	require.False(t, got3.AllowAllKeys, "explicit empty key_ids must still deny-all")
 	require.Empty(t, got3.Keys)
 
 	putVK(t, vk1.ID, fmt.Sprintf(
 		`{"is_active":true,"provider_configs":[{"id":%d,"provider":"%s","allowed_models":["*"],"key_ids":["key-a"]}]}`,
 		pc1.ID, providerName))
-	got4 := providerConfigOf(t, vk1.ID)
+	got4 := vkProviderConfigOf(t, store, vk1.ID)
 	require.False(t, got4.AllowAllKeys)
 	require.Len(t, got4.Keys, 1)
 	require.Equal(t, "key-a", got4.Keys[0].KeyID)
+}
+
+// newKeyAssociationTestHandler returns a governance handler over a store holding the openai
+// provider and one key, "key-a".
+func newKeyAssociationTestHandler(t *testing.T) (*GovernanceHandler, configstore.ConfigStore) {
+	t.Helper()
+	SetLogger(&mockLogger{})
+	store := setupPricingOverrideHandlerStore(t)
+	require.NoError(t, store.AddProvider(context.Background(), schemas.OpenAI, configstore.ProviderConfig{}))
+	require.NoError(t, store.CreateProviderKey(context.Background(), schemas.OpenAI, schemas.Key{
+		ID:    "key-a",
+		Name:  "key-a",
+		Value: *schemas.NewSecretVar("sk-test-a"),
+	}))
+	return &GovernanceHandler{configStore: store, governanceManager: &budgetOverrideTestGovernanceManager{store: store}}, store
+}
+
+func vkProviderConfigOf(t *testing.T, store configstore.ConfigStore, vkID string) *configstoreTables.TableVirtualKeyProviderConfig {
+	t.Helper()
+	vk, err := store.GetVirtualKey(context.Background(), vkID)
+	require.NoError(t, err)
+	require.Len(t, vk.ProviderConfigs, 1)
+	return &vk.ProviderConfigs[0]
+}
+
+// TestVirtualKeyProviderConfig_AcceptsAllowAllKeysAndKeys pins that create and update read the
+// allow_all_keys/keys fields the GET response returns. They used to be dropped, so a VK created
+// with allow_all_keys:true was stored deny-all.
+func TestVirtualKeyProviderConfig_AcceptsAllowAllKeysAndKeys(t *testing.T) {
+	handler, store := newKeyAssociationTestHandler(t)
+
+	createVK := func(t *testing.T, providerConfig string, wantStatus int) *configstoreTables.TableVirtualKeyProviderConfig {
+		t.Helper()
+		rc := newTestRequestCtx(fmt.Sprintf(`{"name":"vk-%d","provider_configs":[%s]}`, time.Now().UnixNano(), providerConfig))
+		handler.createVirtualKey(rc)
+		require.Equal(t, wantStatus, rc.Response.StatusCode(), "resp=%s", rc.Response.Body())
+		if wantStatus != fasthttp.StatusOK {
+			return nil
+		}
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(rc.Response.Body(), &resp))
+		return vkProviderConfigOf(t, store, resp["virtual_key"].(map[string]any)["id"].(string))
+	}
+
+	putVK := func(t *testing.T, pc *configstoreTables.TableVirtualKeyProviderConfig, providerConfig string, wantStatus int) *configstoreTables.TableVirtualKeyProviderConfig {
+		t.Helper()
+		rc := newTestRequestCtx(fmt.Sprintf(`{"provider_configs":[%s]}`, providerConfig))
+		rc.SetUserValue("vk_id", pc.VirtualKeyID)
+		handler.updateVirtualKey(rc)
+		require.Equal(t, wantStatus, rc.Response.StatusCode(), "resp=%s", rc.Response.Body())
+		return vkProviderConfigOf(t, store, pc.VirtualKeyID)
+	}
+	existing := func(pc *configstoreTables.TableVirtualKeyProviderConfig, keyFields string) string {
+		return fmt.Sprintf(`{"id":%d,"provider":"openai","allowed_models":["*"],%s}`, pc.ID, keyFields)
+	}
+
+	pc := createVK(t, `{"provider":"openai","allowed_models":["*"],"allow_all_keys":true}`, fasthttp.StatusOK)
+	require.True(t, pc.AllowAllKeys)
+
+	pc = createVK(t, `{"provider":"openai","allowed_models":["*"],"allow_all_keys":false,"keys":[{"key_id":"key-a","name":"key-a"}]}`, fasthttp.StatusOK)
+	require.False(t, pc.AllowAllKeys)
+	require.Len(t, pc.Keys, 1)
+	require.Equal(t, "key-a", pc.Keys[0].KeyID)
+
+	pc = putVK(t, pc, existing(pc, `"allow_all_keys":true,"keys":[]`), fasthttp.StatusOK)
+	require.True(t, pc.AllowAllKeys)
+	require.Empty(t, pc.Keys)
+
+	pc = putVK(t, pc, existing(pc, `"allow_all_keys":false,"keys":[{"key_id":"key-a"}]`), fasthttp.StatusOK)
+	require.False(t, pc.AllowAllKeys)
+	require.Len(t, pc.Keys, 1)
+
+	// key_ids wins over allow_all_keys/keys echoed back from a GET.
+	pc = putVK(t, pc, existing(pc, `"key_ids":["*"],"allow_all_keys":false,"keys":[{"key_id":"key-a"}]`), fasthttp.StatusOK)
+	require.True(t, pc.AllowAllKeys)
+	require.Empty(t, pc.Keys)
+
+	pc = putVK(t, pc, existing(pc, `"allow_all_keys":false`), fasthttp.StatusOK)
+	require.False(t, pc.AllowAllKeys)
+	require.Empty(t, pc.Keys)
+
+	pc = putVK(t, pc, `{"provider":"openai","allowed_models":["*"],"allow_all_keys":true}`, fasthttp.StatusOK)
+	require.True(t, pc.AllowAllKeys)
+
+	createVK(t, `{"provider":"openai","allowed_models":["*"],"keys":[{"key_id":""}]}`, fasthttp.StatusBadRequest)
+	pc = putVK(t, pc, existing(pc, `"keys":[{"name":"key-a"}]`), fasthttp.StatusBadRequest)
+	require.True(t, pc.AllowAllKeys)
 }
 
 // TestVirtualKeyProviderConfigWeight_RejectsNegative pins that no virtual key write path stores a

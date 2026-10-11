@@ -380,6 +380,8 @@ type CreateVirtualKeyRequest struct {
 		RateLimit         *CreateRateLimitRequest `json:"rate_limit,omitempty"`         // Provider-level rate limit
 		ModelBudgets      []vkModelBudgetRequest  `json:"model_budgets,omitempty"`      // Per-model budgets/rate-limits under this provider
 		KeyIDs            schemas.WhiteList       `json:"key_ids,omitempty"`            // List of DBKey UUIDs to associate with this provider config
+		AllowAllKeys      *bool                   `json:"allow_all_keys,omitempty"`     // Same as key_ids ["*"], as returned by GET
+		Keys              []vkProviderKeyRequest  `json:"keys,omitempty"`               // Same as key_ids, as returned by GET
 	} `json:"provider_configs,omitempty"` // Empty means no providers allowed (deny-by-default)
 	MCPConfigs []struct {
 		MCPClientName  string            `json:"mcp_client_name" validate:"required"`
@@ -422,6 +424,28 @@ type vkModelBudgetUpdateRequest struct {
 	RateLimit *UpdateRateLimitRequest `json:"rate_limit,omitempty"`
 }
 
+// vkProviderKeyRequest reads only key_id so the key objects a GET returns can be sent back as they are.
+type vkProviderKeyRequest struct {
+	KeyID string `json:"key_id"`
+}
+
+func resolveProviderKeyIDs(keyIDs schemas.WhiteList, allowAllKeys *bool, keys []vkProviderKeyRequest) (schemas.WhiteList, error) {
+	if keyIDs != nil || (allowAllKeys == nil && keys == nil) {
+		return keyIDs, nil
+	}
+	if allowAllKeys != nil && *allowAllKeys {
+		return schemas.WhiteList{"*"}, nil
+	}
+	resolved := make(schemas.WhiteList, 0, len(keys))
+	for _, key := range keys {
+		if key.KeyID == "" {
+			return nil, fmt.Errorf("every keys entry needs a key_id")
+		}
+		resolved = append(resolved, key.KeyID)
+	}
+	return resolved, nil
+}
+
 // UpdateVirtualKeyRequest represents the request body for updating a virtual key
 type UpdateVirtualKeyRequest struct {
 	Name            *string `json:"name,omitempty"`
@@ -436,6 +460,8 @@ type UpdateVirtualKeyRequest struct {
 		RateLimit         *UpdateRateLimitRequest      `json:"rate_limit,omitempty"`         // Provider-level rate limit
 		ModelBudgets      []vkModelBudgetUpdateRequest `json:"model_budgets,omitempty"`      // Per-model budgets/rate-limits under this provider (full desired set when provider_configs is supplied)
 		KeyIDs            schemas.WhiteList            `json:"key_ids,omitempty"`            // List of DBKey UUIDs to associate with this provider config
+		AllowAllKeys      *bool                        `json:"allow_all_keys,omitempty"`     // Same as key_ids ["*"], as returned by GET
+		Keys              []vkProviderKeyRequest       `json:"keys,omitempty"`               // Same as key_ids, as returned by GET
 	} `json:"provider_configs,omitempty"`
 	MCPConfigs []struct {
 		ID             *uint             `json:"id,omitempty"` // null for new entries
@@ -2174,6 +2200,11 @@ func (h *GovernanceHandler) createVirtualKey(ctx *fasthttp.RequestCtx) {
 				if err := pc.BlacklistedModels.Validate(); err != nil {
 					return &badRequestError{err: fmt.Errorf("invalid blacklisted_models for provider %s: %w", pc.Provider, err)}
 				}
+				keyIDs, err := resolveProviderKeyIDs(pc.KeyIDs, pc.AllowAllKeys, pc.Keys)
+				if err != nil {
+					return &badRequestError{err: fmt.Errorf("invalid keys for provider %s: %w", pc.Provider, err)}
+				}
+				pc.KeyIDs = keyIDs
 				if err := pc.KeyIDs.Validate(); err != nil {
 					return &badRequestError{err: fmt.Errorf("invalid key_ids for provider %s: %w", pc.Provider, err)}
 				}
@@ -2634,6 +2665,11 @@ func (h *GovernanceHandler) updateVirtualKey(ctx *fasthttp.RequestCtx) {
 					if err := pc.BlacklistedModels.Validate(); err != nil {
 						return &badRequestError{err: fmt.Errorf("invalid blacklisted_models for provider %s: %w", pc.Provider, err)}
 					}
+					keyIDs, err := resolveProviderKeyIDs(pc.KeyIDs, pc.AllowAllKeys, pc.Keys)
+					if err != nil {
+						return &badRequestError{err: fmt.Errorf("invalid keys for provider %s: %w", pc.Provider, err)}
+					}
+					pc.KeyIDs = keyIDs
 					if err := pc.KeyIDs.Validate(); err != nil {
 						return &badRequestError{err: fmt.Errorf("invalid key_ids for provider %s: %w", pc.Provider, err)}
 					}
@@ -2704,6 +2740,11 @@ func (h *GovernanceHandler) updateVirtualKey(ctx *fasthttp.RequestCtx) {
 					if err := pc.BlacklistedModels.Validate(); err != nil {
 						return &badRequestError{err: fmt.Errorf("invalid blacklisted_models for provider %s: %w", pc.Provider, err)}
 					}
+					keyIDs, err := resolveProviderKeyIDs(pc.KeyIDs, pc.AllowAllKeys, pc.Keys)
+					if err != nil {
+						return &badRequestError{err: fmt.Errorf("invalid keys for provider %s: %w", pc.Provider, err)}
+					}
+					pc.KeyIDs = keyIDs
 					if err := pc.KeyIDs.Validate(); err != nil {
 						return &badRequestError{err: fmt.Errorf("invalid key_ids for provider %s: %w", pc.Provider, err)}
 					}
@@ -2718,10 +2759,10 @@ func (h *GovernanceHandler) updateVirtualKey(ctx *fasthttp.RequestCtx) {
 					existing.BlacklistedModels = pc.BlacklistedModels
 
 					// Only touch the key associations when the request actually carries
-					// key_ids. A nil list means the client never sent the field (the GET
-					// response exposes allow_all_keys/keys but not key_ids), so treating
-					// "absent" as deny-all silently drops every key on a GET -> edit ->
-					// PUT round-trip. An explicit [] still clears the associations.
+					// key_ids, allow_all_keys or keys. A nil list means the client sent none
+					// of them, so treating "absent" as deny-all silently drops every key on
+					// a PUT that only edits other fields. An explicit [] still clears the
+					// associations.
 					if pc.KeyIDs != nil {
 						// Get keys for this provider config if specified
 						var keys []configstoreTables.TableKey
