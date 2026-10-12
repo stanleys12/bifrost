@@ -105,6 +105,10 @@ func dropUnsupportedParams(ctx *schemas.BifrostContext, req *schemas.BifrostRequ
 			params.Reasoning = &schemas.ChatReasoning{Effort: new("none")}
 			dropped = append(dropped, "reasoning")
 		}
+		if params.Reasoning != nil && params.Reasoning.Summary != nil && !isSupported["reasoning_summary"] {
+			params.Reasoning.Summary = nil
+			dropped = append(dropped, "reasoning.summary")
+		}
 		if params.ResponseFormat != nil && !isSupported["response_format"] {
 			params.ResponseFormat = nil
 			dropped = append(dropped, "response_format")
@@ -187,6 +191,10 @@ func dropUnsupportedParams(ctx *schemas.BifrostContext, req *schemas.BifrostRequ
 				// Azure's Responses endpoint rejects reasoning.effort for DeepSeek.
 				params.Reasoning = nil
 				dropped = append(dropped, "reasoning")
+			} else if (params.Reasoning.Summary != nil || params.Reasoning.GenerateSummary != nil) && !isSupported["reasoning_summary"] {
+				params.Reasoning.Summary = nil
+				params.Reasoning.GenerateSummary = nil
+				dropped = append(dropped, "reasoning.summary")
 			} else if params.Reasoning.Summary != nil && *params.Reasoning.Summary != "auto" &&
 				schemas.IsAzureModelRouter(req.ResponsesRequest.Model) {
 				// model-router only supports "auto" summary

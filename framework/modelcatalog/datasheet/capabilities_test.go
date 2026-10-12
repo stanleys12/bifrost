@@ -315,3 +315,17 @@ func TestExtractSupportedParams_NoneReasoningEffort(t *testing.T) {
 		t.Errorf("expected supported params to omit \"supports_none_reasoning_effort\" when unset, got %v", got)
 	}
 }
+
+// TestExtractSupportedParams_ReasoningSummary guards supports_reasoning_summary:
+// listed unless the datasheet sets it explicitly false.
+func TestExtractSupportedParams_ReasoningSummary(t *testing.T) {
+	if got := extractSupportedParams(&schemas.ModelCapabilities{}); !slices.Contains(got, "reasoning_summary") {
+		t.Errorf("expected supported params to contain \"reasoning_summary\" when unset, got %v", got)
+	}
+	if got := extractSupportedParams(&schemas.ModelCapabilities{SupportsReasoningSummary: capabilityBoolPtr(true)}); !slices.Contains(got, "reasoning_summary") {
+		t.Errorf("expected supported params to contain \"reasoning_summary\", got %v", got)
+	}
+	if got := extractSupportedParams(&schemas.ModelCapabilities{SupportsReasoningSummary: capabilityBoolPtr(false)}); slices.Contains(got, "reasoning_summary") {
+		t.Errorf("expected supported params to omit \"reasoning_summary\", got %v", got)
+	}
+}

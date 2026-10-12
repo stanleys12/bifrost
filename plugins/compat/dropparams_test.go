@@ -412,3 +412,71 @@ func TestDropUnsupportedParams_ChatReasoningNilForcedToNoneWithUnsupportedTools(
 		t.Errorf("reasoning reported in dropped=%v, want absent since it was never set", dropped)
 	}
 }
+
+// TestDropUnsupportedParams_ReasoningSummary pins that reasoning.summary is dropped,
+// with effort kept, when the datasheet marks supports_reasoning_summary false
+// (e.g. Fireworks models on Azure, which 400 on reasoning.summary).
+func TestDropUnsupportedParams_ReasoningSummary(t *testing.T) {
+	tests := []struct {
+		name          string
+		supported     []string
+		wantPreserved bool
+	}{
+		{name: "summary supported", supported: []string{"reasoning", "reasoning_summary"}, wantPreserved: true},
+		{name: "summary unsupported", supported: []string{"reasoning"}, wantPreserved: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"/responses", func(t *testing.T) {
+			req := newResponsesRequest(schemas.Azure, "FW-GLM-5.3", &schemas.ResponsesParameters{
+				Reasoning: &schemas.ResponsesParametersReasoning{Effort: schemas.Ptr("high"), Summary: schemas.Ptr("detailed")},
+			})
+
+			dropped := dropUnsupportedParams(newTestContext(), req, tt.supported)
+			reasoning := req.ResponsesRequest.Params.Reasoning
+			if reasoning == nil || reasoning.Effort == nil || *reasoning.Effort != "high" {
+				t.Fatalf("reasoning = %+v, want effort=high kept", reasoning)
+			}
+			assertReasoningSummary(t, reasoning.Summary, dropped, tt.wantPreserved)
+		})
+
+		t.Run(tt.name+"/chat", func(t *testing.T) {
+			req := &schemas.BifrostRequest{
+				RequestType: schemas.ChatCompletionRequest,
+				ChatRequest: &schemas.BifrostChatRequest{
+					Provider: schemas.Azure,
+					Model:    "FW-GLM-5.3",
+					Params: &schemas.ChatParameters{
+						Reasoning: &schemas.ChatReasoning{Effort: schemas.Ptr("high"), Summary: schemas.Ptr("detailed")},
+					},
+				},
+			}
+
+			dropped := dropUnsupportedParams(newTestContext(), req, tt.supported)
+			reasoning := req.ChatRequest.Params.Reasoning
+			if reasoning == nil || reasoning.Effort == nil || *reasoning.Effort != "high" {
+				t.Fatalf("reasoning = %+v, want effort=high kept", reasoning)
+			}
+			assertReasoningSummary(t, reasoning.Summary, dropped, tt.wantPreserved)
+		})
+	}
+}
+
+func assertReasoningSummary(t *testing.T, got *string, dropped []string, wantPreserved bool) {
+	t.Helper()
+	if wantPreserved {
+		if got == nil || *got != "detailed" {
+			t.Fatalf("reasoning.summary = %v, want \"detailed\" preserved", got)
+		}
+		if slices.Contains(dropped, "reasoning.summary") {
+			t.Errorf("reasoning.summary reported in dropped=%v, want absent", dropped)
+		}
+		return
+	}
+	if got != nil {
+		t.Fatalf("reasoning.summary = %q, want dropped", *got)
+	}
+	if !slices.Contains(dropped, "reasoning.summary") {
+		t.Errorf("reasoning.summary not reported in dropped=%v, want present", dropped)
+	}
+}
