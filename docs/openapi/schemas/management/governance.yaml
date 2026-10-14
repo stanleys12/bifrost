@@ -513,6 +513,9 @@ CreateVirtualKeyRequest:
             description: Provider API key IDs allowed for this config. `["*"]` allows every key for the provider; an empty or omitted array denies all keys.
             items:
               type: string
+          allow_all_keys:
+            type: boolean
+            description: When true and `key_ids` is omitted, allows every key for the provider (same as `["*"]`). Ignored when `key_ids` is present.
     mcp_configs:
       type: array
       description: MCP configurations (empty means no MCP tools allowed, deny-by-default)
@@ -623,6 +626,9 @@ UpdateVirtualKeyRequest:
             description: Provider API key IDs allowed for this config. `["*"]` allows every key for the provider; an empty or omitted array denies all keys.
             items:
               type: string
+          allow_all_keys:
+            type: boolean
+            description: When true and `key_ids` is omitted, allows every key for the provider (same as `["*"]`). Ignored when `key_ids` is present.
     mcp_configs:
       type: array
       items:

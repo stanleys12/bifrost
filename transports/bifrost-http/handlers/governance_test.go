@@ -23,6 +23,7 @@ import (
 	"github.com/maximhq/bifrost/plugins/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 	"github.com/valyala/fasthttp"
 	"gorm.io/gorm"
 )
@@ -5076,6 +5077,49 @@ func TestUpdateVirtualKey_PutWithoutKeyIDsPreservesKeyAssociations(t *testing.T)
 	require.False(t, got4.AllowAllKeys)
 	require.Len(t, got4.Keys, 1)
 	require.Equal(t, "key-a", got4.Keys[0].KeyID)
+}
+
+// TestVirtualKeyProviderConfig_AllowAllKeysWithoutKeyIDs pins that allow_all_keys, the
+// field the GET response carries, is honored on create and update when key_ids is absent.
+// It used to be dropped on decode, so the provider config was stored deny-all and every
+// request through the key failed with "no keys found for provider".
+func TestVirtualKeyProviderConfig_AllowAllKeysWithoutKeyIDs(t *testing.T) {
+	SetLogger(&mockLogger{})
+	store := setupPricingOverrideHandlerStore(t)
+	handler := &GovernanceHandler{configStore: store, governanceManager: &budgetOverrideTestGovernanceManager{store: store}}
+	ctx := context.Background()
+	require.NoError(t, store.AddProvider(ctx, schemas.OpenAI, configstore.ProviderConfig{}))
+	require.NoError(t, store.CreateProviderKey(ctx, schemas.OpenAI, schemas.Key{ID: "key-a", Name: "key-a", Value: *schemas.NewSecretVar("sk-test-a")}))
+
+	createdConfig := func(body string) configstoreTables.TableVirtualKeyProviderConfig {
+		c := newTestRequestCtx(body)
+		handler.createVirtualKey(c)
+		require.Equal(t, fasthttp.StatusOK, c.Response.StatusCode(), "create body=%s resp=%s", body, c.Response.Body())
+		vk, err := store.GetVirtualKey(ctx, gjson.GetBytes(c.Response.Body(), "virtual_key.id").String())
+		require.NoError(t, err)
+		require.Len(t, vk.ProviderConfigs, 1)
+		return vk.ProviderConfigs[0]
+	}
+
+	pc := createdConfig(`{"name":"vk-allow-all","provider_configs":[{"provider":"openai","allowed_models":["*"],"allow_all_keys":true}]}`)
+	assert.True(t, pc.AllowAllKeys)
+
+	pc = createdConfig(`{"name":"vk-key-ids-win","provider_configs":[{"provider":"openai","allowed_models":["*"],"allow_all_keys":true,"key_ids":["key-a"]}]}`)
+	assert.False(t, pc.AllowAllKeys)
+	require.Len(t, pc.Keys, 1)
+	assert.Equal(t, "key-a", pc.Keys[0].KeyID)
+
+	pc = createdConfig(`{"name":"vk-deny-all","provider_configs":[{"provider":"openai","allowed_models":["*"]}]}`)
+	require.False(t, pc.AllowAllKeys)
+	body := fmt.Sprintf(`{"provider_configs":[{"id":%d,"provider":"openai","allowed_models":["*"],"allow_all_keys":true}]}`, pc.ID)
+	put := newTestRequestCtx(body)
+	put.SetUserValue("vk_id", pc.VirtualKeyID)
+	handler.updateVirtualKey(put)
+	require.Equal(t, fasthttp.StatusOK, put.Response.StatusCode(), "PUT resp=%s", put.Response.Body())
+	vk, err := store.GetVirtualKey(ctx, pc.VirtualKeyID)
+	require.NoError(t, err)
+	require.Len(t, vk.ProviderConfigs, 1)
+	assert.True(t, vk.ProviderConfigs[0].AllowAllKeys)
 }
 
 // TestVirtualKeyProviderConfigWeight_RejectsNegative pins that no virtual key write path stores a

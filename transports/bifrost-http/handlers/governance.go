@@ -380,6 +380,7 @@ type CreateVirtualKeyRequest struct {
 		RateLimit         *CreateRateLimitRequest `json:"rate_limit,omitempty"`         // Provider-level rate limit
 		ModelBudgets      []vkModelBudgetRequest  `json:"model_budgets,omitempty"`      // Per-model budgets/rate-limits under this provider
 		KeyIDs            schemas.WhiteList       `json:"key_ids,omitempty"`            // List of DBKey UUIDs to associate with this provider config
+		AllowAllKeys      bool                    `json:"allow_all_keys,omitempty"`     // Same as key_ids ["*"]; ignored when key_ids is set
 	} `json:"provider_configs,omitempty"` // Empty means no providers allowed (deny-by-default)
 	MCPConfigs []struct {
 		MCPClientName  string            `json:"mcp_client_name" validate:"required"`
@@ -436,6 +437,7 @@ type UpdateVirtualKeyRequest struct {
 		RateLimit         *UpdateRateLimitRequest      `json:"rate_limit,omitempty"`         // Provider-level rate limit
 		ModelBudgets      []vkModelBudgetUpdateRequest `json:"model_budgets,omitempty"`      // Per-model budgets/rate-limits under this provider (full desired set when provider_configs is supplied)
 		KeyIDs            schemas.WhiteList            `json:"key_ids,omitempty"`            // List of DBKey UUIDs to associate with this provider config
+		AllowAllKeys      bool                         `json:"allow_all_keys,omitempty"`     // Same as key_ids ["*"]; ignored when key_ids is set
 	} `json:"provider_configs,omitempty"`
 	MCPConfigs []struct {
 		ID             *uint             `json:"id,omitempty"` // null for new entries
@@ -2174,6 +2176,9 @@ func (h *GovernanceHandler) createVirtualKey(ctx *fasthttp.RequestCtx) {
 				if err := pc.BlacklistedModels.Validate(); err != nil {
 					return &badRequestError{err: fmt.Errorf("invalid blacklisted_models for provider %s: %w", pc.Provider, err)}
 				}
+				if pc.KeyIDs == nil && pc.AllowAllKeys {
+					pc.KeyIDs = schemas.WhiteList{"*"}
+				}
 				if err := pc.KeyIDs.Validate(); err != nil {
 					return &badRequestError{err: fmt.Errorf("invalid key_ids for provider %s: %w", pc.Provider, err)}
 				}
@@ -2626,6 +2631,9 @@ func (h *GovernanceHandler) updateVirtualKey(ctx *fasthttp.RequestCtx) {
 				}
 				if _, ok := providerSet[providerName]; !ok {
 					return &badRequestError{err: fmt.Errorf("invalid provider name: %s", pc.Provider)}
+				}
+				if pc.KeyIDs == nil && pc.AllowAllKeys {
+					pc.KeyIDs = schemas.WhiteList{"*"}
 				}
 				if pc.ID == nil {
 					if err := pc.AllowedModels.Validate(); err != nil {
